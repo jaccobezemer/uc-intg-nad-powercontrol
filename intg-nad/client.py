@@ -82,15 +82,35 @@ class NADClient:
                 cmd_bytes = f"{command}\r\n".encode('ascii')
                 await loop.run_in_executor(None, self._tn.write, cmd_bytes)
 
-                # Read response until newline
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self._tn.read_until(b"\n", timeout=self.timeout)
-                )
+                # Determine expected response prefix based on command
+                # For query commands (Main.Power?), expect response starting with Main.Power=
+                # For set commands (Main.Power=On), expect response with Main.Power=
+                if "?" in command:
+                    expected_prefix = command.replace("?", "=")
+                elif "=" in command:
+                    expected_prefix = command.split("=")[0] + "="
+                else:
+                    expected_prefix = None
 
-                result = response.decode('ascii').strip()
-                _LOG.debug(f"Command: {command} -> Response: {result}")
-                return result
+                # Read responses until we get the expected one or timeout
+                # NAD may send multiple status updates, we need the right one
+                max_attempts = 10
+                for attempt in range(max_attempts):
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self._tn.read_until(b"\n", timeout=self.timeout)
+                    )
+                    result = response.decode('ascii').strip()
+
+                    # Check if this is the response we're looking for
+                    if expected_prefix is None or result.startswith(expected_prefix):
+                        _LOG.debug(f"Command: {command} -> Response: {result}")
+                        return result
+                    else:
+                        _LOG.debug(f"Skipping unrelated status update: {result}")
+
+                _LOG.warning(f"Did not receive expected response for command '{command}'")
+                return None
 
             except Exception as e:
                 _LOG.error(f"Error sending command '{command}': {e}")
