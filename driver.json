@@ -32,8 +32,8 @@
         "field": {
           "label": {
             "value": {
-              "en": "The integration will discover your NAD Receiver on your network when it is equiped with BluOS.",
-              "nl": "De integratie probeert je NAD receiver te vinden in het netwerk indien deze is uitgevoerd is met BluOS."
+              "en": "The integration will discover your NAD device on your network but only when it is equiped with BluOS.",
+              "nl": "De integratie probeert je NAD apparaat te vinden in het netwerk maar daarvoor moet deze zijn uitgevoerd met BluOS."
             }
           }
         }

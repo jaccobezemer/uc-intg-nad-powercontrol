@@ -115,7 +115,7 @@ class NADClient:
                             return result
                         else:
                             skipped_count += 1
-                            _LOG.debug(f"Skipping unrelated status update: {result}")
+                            # _LOG.debug(f"Skipping unrelated status update: {result}")
                     except:
                         # Timeout waiting for next line, but keep trying until total timeout
                         continue
