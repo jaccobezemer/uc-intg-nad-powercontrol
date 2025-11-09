@@ -94,22 +94,33 @@ class NADClient:
 
                 # Read responses until we get the expected one or timeout
                 # NAD may send multiple status updates, we need the right one
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    response = await loop.run_in_executor(
-                        None,
-                        lambda: self._tn.read_until(b"\n", timeout=self.timeout)
-                    )
-                    result = response.decode('ascii').strip()
+                # Use shorter timeout per read (0.5s) but keep trying for total timeout
+                start_time = asyncio.get_event_loop().time()
+                read_timeout = 0.5
+                skipped_count = 0
 
-                    # Check if this is the response we're looking for
-                    if expected_prefix is None or result.startswith(expected_prefix):
-                        _LOG.debug(f"Command: {command} -> Response: {result}")
-                        return result
-                    else:
-                        _LOG.debug(f"Skipping unrelated status update: {result}")
+                while (asyncio.get_event_loop().time() - start_time) < self.timeout:
+                    try:
+                        response = await loop.run_in_executor(
+                            None,
+                            lambda: self._tn.read_until(b"\n", timeout=read_timeout)
+                        )
+                        result = response.decode('ascii').strip()
 
-                _LOG.warning(f"Did not receive expected response for command '{command}'")
+                        # Check if this is the response we're looking for
+                        if expected_prefix is None or result.startswith(expected_prefix):
+                            if skipped_count > 0:
+                                _LOG.debug(f"Skipped {skipped_count} status updates before receiving response")
+                            _LOG.debug(f"Command: {command} -> Response: {result}")
+                            return result
+                        else:
+                            skipped_count += 1
+                            _LOG.debug(f"Skipping unrelated status update: {result}")
+                    except:
+                        # Timeout waiting for next line, but keep trying until total timeout
+                        continue
+
+                _LOG.warning(f"Did not receive expected response for command '{command}' after {skipped_count} status updates")
                 return None
 
             except Exception as e:
