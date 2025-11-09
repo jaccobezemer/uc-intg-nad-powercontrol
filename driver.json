@@ -1,0 +1,28 @@
+{
+  "driver_id": "nad_powercontrol",
+  "version": "0.1.0",
+  "min_core_api": "0.20.0",
+  "name": {
+    "en": "NAD On/Off via Telnet",
+    "nl": "NAD Aan/Uit via Telnet"
+  },
+  "description": {
+    "en": "Integration for controling the On/Off state of NAD receivers via Telnet protocol",
+    "nl": "Integratie voor het regelen van de aan/uit staat van NAD receivers via Telnet protocol"
+  },
+  "icon": "custom:NAD-logo.png",
+  "developer": {
+    "name": "Jacco Bezemer",
+    "url": "https://github.com/jaccobezemer"
+  },
+  "home_page": "https://github.com/jaccobezemer/uc-intg-nad-powercontrol",
+  "port": 9002,
+  "setup_data_schema": {
+    "title": {
+      "en": "NAD Receiver Setup",
+      "nl": "NAD Receiver Configuratie"
+    },
+    "settings": []
+  },
+  "release_date": "2025-01-07"
+}

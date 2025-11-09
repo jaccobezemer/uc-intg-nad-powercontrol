@@ -1,0 +1,277 @@
+"""NAD Receiver Telnet Client."""
+import asyncio
+import logging
+import telnetlib
+from typing import Optional
+
+_LOG = logging.getLogger(__name__)
+
+
+class NADClient:
+    """
+    Async wrapper for NAD receiver telnet control.
+
+    Based on joopert/nad_receiver library.
+    """
+
+    def __init__(self, host: str, port: int = 23, timeout: int = 5):
+        """
+        Initialize NAD client.
+
+        Args:
+            host: NAD receiver IP address
+            port: Telnet port (default 23)
+            timeout: Command timeout in seconds
+        """
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self._tn: Optional[telnetlib.Telnet] = None
+        self._lock = asyncio.Lock()
+
+    async def connect(self) -> bool:
+        """
+        Connect to NAD receiver via telnet.
+
+        Returns:
+            True if connected successfully
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            self._tn = await loop.run_in_executor(
+                None,
+                lambda: telnetlib.Telnet(self.host, self.port, self.timeout)
+            )
+            _LOG.info(f"Connected to NAD receiver at {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            _LOG.error(f"Failed to connect to NAD receiver: {e}")
+            return False
+
+    async def close(self):
+        """Close telnet connection."""
+        if self._tn:
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._tn.close)
+                _LOG.info("NAD telnet connection closed")
+            except Exception as e:
+                _LOG.error(f"Error closing connection: {e}")
+            finally:
+                self._tn = None
+
+    async def _send_command(self, command: str) -> Optional[str]:
+        """
+        Send command to NAD receiver.
+
+        Args:
+            command: NAD command (e.g., "Main.Volume?", "Main.Power=On")
+
+        Returns:
+            Response string or None on error
+        """
+        if not self._tn:
+            _LOG.error("Not connected to NAD receiver")
+            return None
+
+        async with self._lock:
+            try:
+                loop = asyncio.get_event_loop()
+
+                # Send command with newline
+                cmd_bytes = f"{command}\r\n".encode('ascii')
+                await loop.run_in_executor(None, self._tn.write, cmd_bytes)
+
+                # Read response until newline
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._tn.read_until(b"\n", timeout=self.timeout)
+                )
+
+                result = response.decode('ascii').strip()
+                _LOG.debug(f"Command: {command} -> Response: {result}")
+                return result
+
+            except Exception as e:
+                _LOG.error(f"Error sending command '{command}': {e}")
+                return None
+
+    async def get_power(self) -> Optional[bool]:
+        """
+        Get power state.
+
+        Returns:
+            True if on, False if off, None on error
+        """
+        response = await self._send_command("Main.Power?")
+        if response and "=" in response:
+            value = response.split("=")[1].strip()
+            return value.lower() == "on"
+        return None
+
+    async def set_power(self, on: bool) -> bool:
+        """
+        Set power state.
+
+        Args:
+            on: True to turn on, False to turn off
+
+        Returns:
+            True if successful
+        """
+        command = "Main.Power=On" if on else "Main.Power=Off"
+        response = await self._send_command(command)
+        return response is not None
+
+    async def get_volume(self) -> Optional[int]:
+        """
+        Get volume level (0-100).
+
+        Returns:
+            Volume level or None on error
+        """
+        response = await self._send_command("Main.Volume?")
+        if response and "=" in response:
+            try:
+                # NAD returns volume in -dB format, convert to 0-100
+                # Typical range: -92dB (min) to 0dB (max)
+                value = response.split("=")[1].strip()
+                if value.startswith("-"):
+                    db = int(value.replace("dB", ""))
+                    # Convert -92dB...0dB to 0...100
+                    volume = max(0, min(100, int((db + 92) * 100 / 92)))
+                    return volume
+                return 0
+            except ValueError:
+                _LOG.error(f"Invalid volume response: {response}")
+        return None
+
+    async def set_volume(self, volume: int) -> bool:
+        """
+        Set volume level (0-100).
+
+        Args:
+            volume: Volume level (0-100)
+
+        Returns:
+            True if successful
+        """
+        # Convert 0-100 to -92dB...0dB
+        volume = max(0, min(100, volume))
+        db = int((volume * 92 / 100) - 92)
+        command = f"Main.Volume={db}"
+        response = await self._send_command(command)
+        return response is not None
+
+    async def volume_up(self) -> bool:
+        """
+        Increase volume.
+
+        Returns:
+            True if successful
+        """
+        response = await self._send_command("Main.Volume+")
+        return response is not None
+
+    async def volume_down(self) -> bool:
+        """
+        Decrease volume.
+
+        Returns:
+            True if successful
+        """
+        response = await self._send_command("Main.Volume-")
+        return response is not None
+
+    async def get_mute(self) -> Optional[bool]:
+        """
+        Get mute state.
+
+        Returns:
+            True if muted, False if not muted, None on error
+        """
+        response = await self._send_command("Main.Mute?")
+        if response and "=" in response:
+            value = response.split("=")[1].strip()
+            return value.lower() == "on"
+        return None
+
+    async def set_mute(self, muted: bool) -> bool:
+        """
+        Set mute state.
+
+        Args:
+            muted: True to mute, False to unmute
+
+        Returns:
+            True if successful
+        """
+        command = "Main.Mute=On" if muted else "Main.Mute=Off"
+        response = await self._send_command(command)
+        return response is not None
+
+    async def toggle_mute(self) -> bool:
+        """
+        Toggle mute state.
+
+        Returns:
+            True if successful
+        """
+        current = await self.get_mute()
+        if current is not None:
+            return await self.set_mute(not current)
+        return False
+
+    async def get_source(self) -> Optional[int]:
+        """
+        Get current source (1-based index).
+
+        Returns:
+            Source number or None on error
+        """
+        response = await self._send_command("Main.Source?")
+        if response and "=" in response:
+            try:
+                value = response.split("=")[1].strip()
+                return int(value)
+            except ValueError:
+                _LOG.error(f"Invalid source response: {response}")
+        return None
+
+    async def set_source(self, source: int) -> bool:
+        """
+        Set source (1-based index).
+
+        Args:
+            source: Source number (typically 1-12)
+
+        Returns:
+            True if successful
+        """
+        command = f"Main.Source={source}"
+        response = await self._send_command(command)
+        return response is not None
+
+    async def get_model(self) -> Optional[str]:
+        """
+        Get receiver model.
+
+        Returns:
+            Model string or None on error
+        """
+        response = await self._send_command("Main.Model?")
+        if response and "=" in response:
+            return response.split("=")[1].strip()
+        return None
+
+    async def get_version(self) -> Optional[str]:
+        """
+        Get firmware version.
+
+        Returns:
+            Version string or None on error
+        """
+        response = await self._send_command("Main.Version?")
+        if response and "=" in response:
+            return response.split("=")[1].strip()
+        return None
