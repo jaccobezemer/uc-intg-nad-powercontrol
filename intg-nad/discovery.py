@@ -64,6 +64,9 @@ class NADDeviceListener(ServiceListener):
                 if model not in device_name:
                     device_name = f"{model} - {device_name}"
 
+            # Add " Remote" suffix to the device name
+            device_name = f"{device_name} Remote"
+
             device_key = f"{host}:{port}"
             if device_key in self._discovered:
                 return
