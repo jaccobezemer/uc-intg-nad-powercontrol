@@ -211,8 +211,22 @@ async def main(loop: asyncio.AbstractEventLoop):
 
     @api.listens_to(ucapi.Events.EXIT_STANDBY)
     async def on_exit_standby() -> None:
-        """Handle exit standby event."""
+        """Handle exit standby event - reconnect devices with monitoring enabled."""
         _LOG.info("UC Remote 3 exiting standby")
+
+        # Reconnect devices that have power monitoring enabled
+        for device_id, device in nad_devices.items():
+            if device._monitor_power:
+                _LOG.info(f"Reconnecting device {device_id} after standby")
+                try:
+                    # Check if still connected
+                    if device.client._tn is None:
+                        await device.connect()
+                        _LOG.info(f"Device {device_id} reconnected successfully")
+                    else:
+                        _LOG.debug(f"Device {device_id} still connected")
+                except Exception as e:
+                    _LOG.error(f"Failed to reconnect device {device_id}: {e}")
 
     @api.listens_to(ucapi.Events.SUBSCRIBE_ENTITIES)
     async def on_subscribe_entities(entity_ids: list[str]) -> None:
