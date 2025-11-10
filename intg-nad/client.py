@@ -83,6 +83,7 @@ class NADClient:
 
                 # Send command with newline
                 cmd_bytes = f"{command}\r\n".encode('ascii')
+                _LOG.debug(f"Sending command: '{command}' (bytes={cmd_bytes!r})")
                 await loop.run_in_executor(None, self._tn.write, cmd_bytes)
 
                 # Determine expected response prefix based on command
@@ -109,6 +110,12 @@ class NADClient:
                             lambda: self._tn.read_until(b"\n", timeout=read_timeout)
                         )
                         result = response.decode('ascii').strip()
+                        _LOG.debug(f"Received telnet data: '{result}' (length={len(result)}, bytes={response!r})")
+
+                        # Skip empty lines
+                        if not result:
+                            _LOG.debug("Skipping empty line")
+                            continue
 
                         # Check if this is the response we're looking for
                         if expected_prefix is None or result.startswith(expected_prefix):
@@ -118,12 +125,13 @@ class NADClient:
                             return result
                         else:
                             skipped_count += 1
-                            # _LOG.debug(f"Skipping unrelated status update: {result}")
-                    except:
-                        # Timeout waiting for next line, but keep trying until total timeout
+                            _LOG.debug(f"Skipping unrelated status update: '{result}' (expected prefix: '{expected_prefix}')")
+                    except Exception as e:
+                        # Timeout or other error waiting for next line
+                        _LOG.debug(f"Read timeout or error (expected, continuing): {type(e).__name__}")
                         continue
 
-                _LOG.warning(f"Did not receive expected response for command '{command}' after {skipped_count} status updates")
+                _LOG.warning(f"Did not receive expected response for command '{command}' after {skipped_count} status updates (expected prefix: '{expected_prefix}')")
                 return None
 
             except Exception as e:
@@ -365,23 +373,27 @@ class NADClient:
 
                     result = response.decode('ascii').strip()
 
-                    # Check if it's a power state update
-                    if result.startswith("Main.Power="):
-                        value = result.split("=")[1].strip()
-                        power_on = value.lower() == "on"
-                        _LOG.info(f"Power state changed: {'ON' if power_on else 'OFF'}")
+                    # Log all received data
+                    if result:
+                        _LOG.debug(f"Monitor received: '{result}' (length={len(result)}, bytes={response!r})")
 
-                        # Call the callback
-                        if self._power_callback:
-                            if asyncio.iscoroutinefunction(self._power_callback):
-                                await self._power_callback(power_on)
-                            else:
-                                self._power_callback(power_on)
+                        # Check if it's a power state update
+                        if result.startswith("Main.Power="):
+                            value = result.split("=")[1].strip()
+                            power_on = value.lower() == "on"
+                            _LOG.info(f"Power state changed: {'ON' if power_on else 'OFF'}")
 
-                        consecutive_errors = 0
-                    else:
-                        # Log other unsolicited messages for debugging
-                        _LOG.debug(f"Unsolicited message: {result}")
+                            # Call the callback
+                            if self._power_callback:
+                                if asyncio.iscoroutinefunction(self._power_callback):
+                                    await self._power_callback(power_on)
+                                else:
+                                    self._power_callback(power_on)
+
+                            consecutive_errors = 0
+                        else:
+                            # Log other unsolicited messages for debugging
+                            _LOG.debug(f"Unsolicited message (not power change): '{result}'")
 
                 except asyncio.TimeoutError:
                     # Normal - no data available, continue monitoring
