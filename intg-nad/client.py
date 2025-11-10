@@ -355,13 +355,33 @@ class NADClient:
 
         The NAD sends Main.Power=On/Off messages automatically when power state
         changes (e.g., via physical button or remote).
+
+        If connection is lost, attempts to reconnect every 10 seconds.
         """
         _LOG.info("Starting power monitoring loop")
         consecutive_errors = 0
         max_consecutive_errors = 5
+        reconnect_delay = 10  # seconds between reconnect attempts
 
         try:
-            while self._monitoring and self._tn:
+            while self._monitoring:
+                # Check if connection is lost
+                if self._tn is None:
+                    _LOG.warning("Telnet connection lost, attempting to reconnect...")
+                    try:
+                        connected = await self.connect()
+                        if connected:
+                            _LOG.info("Reconnected to NAD receiver successfully")
+                            consecutive_errors = 0
+                        else:
+                            _LOG.warning(f"Reconnection failed, retrying in {reconnect_delay} seconds")
+                            await asyncio.sleep(reconnect_delay)
+                            continue
+                    except Exception as e:
+                        _LOG.error(f"Reconnection error: {e}")
+                        await asyncio.sleep(reconnect_delay)
+                        continue
+
                 try:
                     loop = asyncio.get_event_loop()
 
@@ -392,8 +412,9 @@ class NADClient:
 
                             consecutive_errors = 0
                         else:
-                            # Log other unsolicited messages for debugging
-                            _LOG.debug(f"Unsolicited message (not power change): '{result}'")
+                            # Skip temperature messages from debug log to reduce noise
+                            if not result.startswith("Main.Temp."):
+                                _LOG.debug(f"Unsolicited message (not power change): '{result}'")
 
                 except asyncio.TimeoutError:
                     # Normal - no data available, continue monitoring
@@ -404,10 +425,19 @@ class NADClient:
                     raise
                 except Exception as e:
                     consecutive_errors += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        _LOG.error(f"Too many consecutive errors ({consecutive_errors}), stopping monitoring: {e}")
-                        break
                     _LOG.warning(f"Error in power monitoring loop: {e}")
+
+                    # Connection likely lost - close and mark for reconnect
+                    if consecutive_errors >= max_consecutive_errors:
+                        _LOG.error(f"Too many consecutive errors ({consecutive_errors}), closing connection for reconnect")
+                        try:
+                            if self._tn:
+                                self._tn.close()
+                        except:
+                            pass
+                        self._tn = None
+                        consecutive_errors = 0
+
                     await asyncio.sleep(1)
 
         finally:
