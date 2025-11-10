@@ -38,12 +38,14 @@ async def add_device(device_config: NADdevice) -> bool:
 
     _LOG.info(f"Adding NAD device: {device_config.device_id} ({device_config.name})")
     _LOG.debug(f"  Address: {device_config.address}:{device_config.port}")
+    _LOG.debug(f"  Monitor power: {device_config.monitor_power}")
 
     device = NADRemote(
         host=device_config.address,
         port=device_config.port,
         name=device_config.name,
-        api=api
+        api=api,
+        monitor_power=device_config.monitor_power
     )
     _LOG.debug(f"  NADRemote instance created with entity_id: {device.entity_id}")
 
@@ -246,7 +248,7 @@ async def main(loop: asyncio.AbstractEventLoop):
         _LOG.error(f"Unknown setup message type: {type(msg)}")
         return ucapi.SetupError()
 
-    async def configure_device(name: str, host: str, port: int) -> ucapi.SetupAction:
+    async def configure_device(name: str, host: str, port: int, monitor_power: bool = False) -> ucapi.SetupAction:
         """
         Configure a NAD device with the given parameters.
 
@@ -254,11 +256,12 @@ async def main(loop: asyncio.AbstractEventLoop):
             name: Device name
             host: IP address
             port: Telnet port
+            monitor_power: Enable power state monitoring
 
         Returns:
             SetupComplete on success, SetupError on failure
         """
-        _LOG.info(f"Configuring NAD receiver '{name}' at {host}:{port}")
+        _LOG.info(f"Configuring NAD receiver '{name}' at {host}:{port} (monitor_power={monitor_power})")
 
         # Create device_id from IP address
         device_id = f"nad_{host.replace('.', '_')}"
@@ -273,7 +276,8 @@ async def main(loop: asyncio.AbstractEventLoop):
             device_id=device_id,
             name=name,
             address=host,
-            port=port
+            port=port,
+            monitor_power=monitor_power
         )
 
         # Save to config
@@ -299,6 +303,9 @@ async def main(loop: asyncio.AbstractEventLoop):
         _LOG.info("Processing user data response")
         _LOG.debug(f"Input values: {msg.input_values}")
 
+        # Get monitor_power setting from input
+        monitor_power = msg.input_values.get("monitor_power", False)
+
         # Step 2: User selected discovered device (check this FIRST!)
         if "device_choice" in msg.input_values:
             choice = msg.input_values["device_choice"]
@@ -313,7 +320,7 @@ async def main(loop: asyncio.AbstractEventLoop):
             host = device_info["host"]
             port = device_info.get("port", 23)
 
-            return await configure_device(name, host, port)
+            return await configure_device(name, host, port, monitor_power)
 
         # Step 1: Discovery/manual input (only if no device_choice)
         elif "address" in msg.input_values:
@@ -322,7 +329,7 @@ async def main(loop: asyncio.AbstractEventLoop):
             if address:
                 # Manual IP entered - configure directly
                 _LOG.info(f"Manual address entered: {address}")
-                return await configure_device("NAD Receiver", address, 23)
+                return await configure_device("NAD Receiver", address, 23, monitor_power)
             else:
                 # Auto-discovery
                 _LOG.info("Starting auto-discovery")
@@ -361,6 +368,16 @@ async def main(loop: asyncio.AbstractEventLoop):
                                     "value": dropdown_items[0]["id"],
                                     "items": dropdown_items
                                 }
+                            }
+                        },
+                        {
+                            "id": "monitor_power",
+                            "label": {
+                                "en": "Monitor Power State",
+                                "nl": "Monitor Aan/Uit Status"
+                            },
+                            "field": {
+                                "checkbox": {"value": False}
                             }
                         }
                     ]
@@ -419,6 +436,16 @@ async def main(loop: asyncio.AbstractEventLoop):
                     },
                     "field": {
                         "text": {"value": ""}
+                    }
+                },
+                {
+                    "id": "monitor_power",
+                    "label": {
+                        "en": "Monitor Power State",
+                        "nl": "Monitor Aan/Uit Status"
+                    },
+                    "field": {
+                        "checkbox": {"value": False}
                     }
                 }
             ]
