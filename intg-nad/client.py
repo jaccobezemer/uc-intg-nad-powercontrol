@@ -325,10 +325,12 @@ class NADClient:
         Args:
             callback: Async function to call when power state changes (receives True/False)
         """
-        if self._monitoring:
+        # Check if monitoring is actually running (not just flag set)
+        if self._monitoring and self._monitor_task and not self._monitor_task.done():
             _LOG.warning("Power monitoring already started")
             return
 
+        # Restart monitoring
         self._power_callback = callback
         self._monitoring = True
         self._monitor_task = asyncio.create_task(self._monitor_power_loop())
