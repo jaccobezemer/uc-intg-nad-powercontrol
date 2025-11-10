@@ -214,19 +214,41 @@ async def main(loop: asyncio.AbstractEventLoop):
         """Handle exit standby event - reconnect devices with monitoring enabled."""
         _LOG.info("UC Remote 3 exiting standby")
 
+        # Wait for network to become available after standby
+        _LOG.info("Waiting 3 seconds for network to stabilize...")
+        await asyncio.sleep(3)
+
         # Reconnect devices that have power monitoring enabled
         for device_id, device in nad_devices.items():
             if device._monitor_power:
                 _LOG.info(f"Reconnecting device {device_id} after standby")
-                try:
-                    # Check if still connected
-                    if device.client._tn is None:
-                        await device.connect()
-                        _LOG.info(f"Device {device_id} reconnected successfully")
-                    else:
-                        _LOG.debug(f"Device {device_id} still connected")
-                except Exception as e:
-                    _LOG.error(f"Failed to reconnect device {device_id}: {e}")
+
+                # Try up to 3 times with increasing delays
+                max_attempts = 3
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        # Check if still connected
+                        if device.client._tn is None or not device.client._monitoring:
+                            _LOG.info(f"Attempt {attempt}/{max_attempts}: Connecting to {device_id}")
+                            connected = await device.connect()
+                            if connected:
+                                _LOG.info(f"Device {device_id} reconnected successfully")
+                                break
+                            else:
+                                _LOG.warning(f"Connection attempt {attempt} failed for {device_id}")
+                        else:
+                            _LOG.debug(f"Device {device_id} still connected")
+                            break
+                    except Exception as e:
+                        _LOG.warning(f"Reconnection attempt {attempt} failed for {device_id}: {e}")
+
+                    # Wait before retry (except on last attempt)
+                    if attempt < max_attempts:
+                        wait_time = attempt * 2  # 2, 4 seconds
+                        _LOG.info(f"Waiting {wait_time} seconds before retry...")
+                        await asyncio.sleep(wait_time)
+                else:
+                    _LOG.error(f"Failed to reconnect device {device_id} after {max_attempts} attempts")
 
     @api.listens_to(ucapi.Events.SUBSCRIBE_ENTITIES)
     async def on_subscribe_entities(entity_ids: list[str]) -> None:
