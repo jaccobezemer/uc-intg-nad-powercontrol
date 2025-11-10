@@ -324,12 +324,18 @@ async def main(loop: asyncio.AbstractEventLoop):
 
         # Step 1: Discovery/manual input (only if no device_choice)
         elif "address" in msg.input_values:
-            address = msg.input_values["address"].strip()
+            name = msg.input_values.get("name", "").strip()
+            address = msg.input_values.get("address", "").strip()
+            port = msg.input_values.get("port", 23)
 
-            if address:
-                # Manual IP entered - configure directly
-                _LOG.info(f"Manual address entered: {address}")
-                return await configure_device("NAD Receiver", address, 23, monitor_power)
+            # Manual configuration - name and address both provided
+            if name and address:
+                _LOG.info(f"Manual configuration: {name} at {address}:{port}")
+                return await configure_device(name, address, port, monitor_power)
+            # Only address provided, use default name
+            elif address:
+                _LOG.info(f"Manual address entered: {address}:{port}")
+                return await configure_device("NAD Receiver", address, port, monitor_power)
             else:
                 # Auto-discovery
                 _LOG.info("Starting auto-discovery")
@@ -422,10 +428,20 @@ async def main(loop: asyncio.AbstractEventLoop):
                     "field": {
                         "label": {
                             "value": {
-                                "en": "Leave blank to use auto-discovery.",
-                                "nl": "Laat leeg voor automatische ontdekking."
+                                "en": "Leave blank for auto-discovery or enter details manually.",
+                                "nl": "Laat leeg voor automatische ontdekking of vul handmatig in."
                             }
                         }
+                    }
+                },
+                {
+                    "id": "name",
+                    "label": {
+                        "en": "Device Name",
+                        "nl": "Apparaat Naam"
+                    },
+                    "field": {
+                        "text": {"value": ""}
                     }
                 },
                 {
@@ -436,6 +452,16 @@ async def main(loop: asyncio.AbstractEventLoop):
                     },
                     "field": {
                         "text": {"value": ""}
+                    }
+                },
+                {
+                    "id": "port",
+                    "label": {
+                        "en": "Port",
+                        "nl": "Poort"
+                    },
+                    "field": {
+                        "number": {"value": 23, "min": 1, "max": 65535}
                     }
                 },
                 {
