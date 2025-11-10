@@ -395,12 +395,11 @@ class NADClient:
 
                     result = response.decode('ascii').strip()
 
-                    # Log all received data
+                    # Process received data (skip temperature to reduce log noise)
                     if result:
-                        _LOG.debug(f"Monitor received: '{result}' (length={len(result)}, bytes={response!r})")
-
                         # Check if it's a power state update
                         if result.startswith("Main.Power="):
+                            _LOG.debug(f"Monitor received: '{result}' (length={len(result)}, bytes={response!r})")
                             value = result.split("=")[1].strip()
                             power_on = value.lower() == "on"
                             _LOG.info(f"Power state changed: {'ON' if power_on else 'OFF'}")
@@ -413,10 +412,9 @@ class NADClient:
                                     self._power_callback(power_on)
 
                             consecutive_errors = 0
-                        else:
-                            # Skip temperature messages from debug log to reduce noise
-                            if not result.startswith("Main.Temp."):
-                                _LOG.debug(f"Unsolicited message (not power change): '{result}'")
+                        elif not result.startswith("Main.Temp."):
+                            # Log non-temperature unsolicited messages
+                            _LOG.debug(f"Unsolicited message: '{result}' (length={len(result)}, bytes={response!r})")
 
                 except asyncio.TimeoutError:
                     # Normal - no data available, continue monitoring
