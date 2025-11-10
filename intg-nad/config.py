@@ -16,6 +16,7 @@ class NADdevice:
     address: str
     port: int = 23
     enabled: bool = True
+    monitor_power: bool = False  # Enable continuous power status monitoring
 
 class Config:
     """Configuration manager for NAD devices."""

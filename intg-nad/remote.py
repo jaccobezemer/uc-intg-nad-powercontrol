@@ -19,7 +19,7 @@ _LOG = logging.getLogger(__name__)
 class NADRemote(Remote):
     """NAD Receiver Remote entity."""
 
-    def __init__(self, host: str, port: int = 23, name: str = "NAD Receiver", api=None):
+    def __init__(self, host: str, port: int = 23, name: str = "NAD Receiver", api=None, monitor_power: bool = False):
         """
         Initialize NAD remote.
 
@@ -28,11 +28,13 @@ class NADRemote(Remote):
             port: Telnet port (default 23)
             name: Device name (from setup)
             api: Integration API instance
+            monitor_power: Enable continuous power state monitoring
         """
         self.host = host
         self.port = port
         self._api = api
         self.entity_id = f"nad_{host.replace('.', '_')}"
+        self._monitor_power = monitor_power
 
         self.client = NADClient(host=host, port=port)
 
@@ -76,6 +78,11 @@ class NADRemote(Remote):
             _LOG.debug(f"Model response: {model}, Version response: {version}")
             _LOG.info(f"Connected to NAD receiver at {self.host} (model: {model}, firmware: {version})")
 
+            # Start power monitoring if enabled
+            if self._monitor_power:
+                _LOG.info("Starting power state monitoring")
+                self.client.start_power_monitoring(self._on_power_change)
+
             return True
 
         except Exception as e:
@@ -85,7 +92,23 @@ class NADRemote(Remote):
     async def disconnect(self):
         """Disconnect from device."""
         _LOG.info(f"Disconnecting from NAD receiver at {self.host}")
+
+        # Stop power monitoring if running
+        if self._monitor_power:
+            await self.client.stop_power_monitoring()
+
         await self.client.close()
+
+    async def _on_power_change(self, power_on: bool):
+        """
+        Callback when power state changes.
+
+        Args:
+            power_on: True if power is on, False if off
+        """
+        _LOG.info(f"Power state changed externally: {'ON' if power_on else 'OFF'}")
+        self._state = States.ON if power_on else States.OFF
+        await self.update_attributes()
 
     async def update_status(self):
         """Update device status from receiver."""

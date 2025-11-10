@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import telnetlib
-from typing import Optional
+from typing import Optional, Callable
 
 _LOG = logging.getLogger(__name__)
 
@@ -28,6 +28,9 @@ class NADClient:
         self.timeout = timeout
         self._tn: Optional[telnetlib.Telnet] = None
         self._lock = asyncio.Lock()
+        self._monitoring = False
+        self._monitor_task: Optional[asyncio.Task] = None
+        self._power_callback: Optional[Callable[[bool], None]] = None
 
     async def connect(self) -> bool:
         """
@@ -306,3 +309,95 @@ class NADClient:
         if response and "=" in response:
             return response.split("=")[1].strip()
         return None
+
+    def start_power_monitoring(self, callback: Callable[[bool], None]) -> None:
+        """
+        Start monitoring power state changes.
+
+        Args:
+            callback: Async function to call when power state changes (receives True/False)
+        """
+        if self._monitoring:
+            _LOG.warning("Power monitoring already started")
+            return
+
+        self._power_callback = callback
+        self._monitoring = True
+        self._monitor_task = asyncio.create_task(self._monitor_power_loop())
+        _LOG.info("Started power state monitoring")
+
+    async def stop_power_monitoring(self) -> None:
+        """Stop monitoring power state changes."""
+        self._monitoring = False
+
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+
+        self._monitor_task = None
+        self._power_callback = None
+        _LOG.info("Stopped power state monitoring")
+
+    async def _monitor_power_loop(self) -> None:
+        """
+        Background task to monitor unsolicited power state updates from NAD.
+
+        The NAD sends Main.Power=On/Off messages automatically when power state
+        changes (e.g., via physical button or remote).
+        """
+        _LOG.info("Starting power monitoring loop")
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+
+        try:
+            while self._monitoring and self._tn:
+                try:
+                    loop = asyncio.get_event_loop()
+
+                    # Read any incoming line with short timeout (non-blocking check)
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self._tn.read_until(b"\n", timeout=1.0)
+                    )
+
+                    result = response.decode('ascii').strip()
+
+                    # Check if it's a power state update
+                    if result.startswith("Main.Power="):
+                        value = result.split("=")[1].strip()
+                        power_on = value.lower() == "on"
+                        _LOG.info(f"Power state changed: {'ON' if power_on else 'OFF'}")
+
+                        # Call the callback
+                        if self._power_callback:
+                            if asyncio.iscoroutinefunction(self._power_callback):
+                                await self._power_callback(power_on)
+                            else:
+                                self._power_callback(power_on)
+
+                        consecutive_errors = 0
+                    else:
+                        # Log other unsolicited messages for debugging
+                        _LOG.debug(f"Unsolicited message: {result}")
+
+                except asyncio.TimeoutError:
+                    # Normal - no data available, continue monitoring
+                    consecutive_errors = 0
+                    continue
+                except asyncio.CancelledError:
+                    _LOG.info("Power monitoring task cancelled")
+                    raise
+                except Exception as e:
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        _LOG.error(f"Too many consecutive errors ({consecutive_errors}), stopping monitoring: {e}")
+                        break
+                    _LOG.warning(f"Error in power monitoring loop: {e}")
+                    await asyncio.sleep(1)
+
+        finally:
+            self._monitoring = False
+            _LOG.info("Power monitoring loop stopped")
