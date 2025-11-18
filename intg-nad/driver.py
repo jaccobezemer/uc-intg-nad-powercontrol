@@ -105,38 +105,6 @@ async def remove_device(device_id: str) -> bool:
     _LOG.info(f"NAD device removed: {device_id}")
     return True
 
-# DISABLED: Discovery functionality
-# async def on_device_discovered(device_info: dict) -> None:
-#     """
-#     Handle discovered BluOS device.
-#
-#     Stores device info for use during setup.
-#     Does NOT automatically configure or connect.
-#
-#     Args:
-#         device_info: Device info from mDNS discovery
-#     """
-#     global discovered_devices
-#
-#     _LOG.info(f"Device discovered via mDNS: {device_info}")
-#
-#     # Create device_id
-#     device_id = f"bluos_{device_info['host'].replace('.', '_')}"
-#
-#     # Check if already in discovered cache
-#     if device_id in discovered_devices:
-#         _LOG.debug(f"Device {device_id} already in discovered cache")
-#         return
-#
-#     # Store discovery info for later use in setup
-#     # Note: We cache even if device is already configured, in case setup runs again
-#     discovered_devices[device_id] = device_info
-#
-#     if device_id in nad_devices:
-#         _LOG.info(f"Cached discovered device: {device_info['name']} ({device_id}) - already configured")
-#     else:
-#         _LOG.info(f"Cached discovered device: {device_info['name']} ({device_id})")
-
 async def main(loop: asyncio.AbstractEventLoop):
     """Start the integration driver."""
     global api, config
@@ -343,7 +311,7 @@ async def main(loop: asyncio.AbstractEventLoop):
         _LOG.debug(f"Input values: {msg.input_values}")
 
         # Get monitor_power setting from input
-        monitor_power = msg.input_values.get("monitor_power", False)
+        monitor_power = True  # msg.input_values.get("monitor_power", True)
 
         # Step 2: User selected discovered device (check this FIRST!)
         if "device_choice" in msg.input_values:
@@ -415,16 +383,16 @@ async def main(loop: asyncio.AbstractEventLoop):
                                 }
                             }
                         },
-                        {
-                            "id": "monitor_power",
-                            "label": {
-                                "en": "Monitor Power State",
-                                "nl": "Monitor Aan/Uit Status"
-                            },
-                            "field": {
-                                "checkbox": {"value": False}
-                            }
-                        }
+                        # {
+                        #     "id": "monitor_power",
+                        #     "label": {
+                        #         "en": "Monitor Power State",
+                        #         "nl": "Monitor Aan/Uit Status"
+                        #     },
+                        #     "field": {
+                        #         "checkbox": {"value": False}
+                        #     }
+                        # }
                     ]
                 )
 
@@ -486,8 +454,8 @@ async def main(loop: asyncio.AbstractEventLoop):
                 {
                     "id": "address",
                     "label": {
-                        "en": "IP Address",
-                        "nl": "IP Adres"
+                        "en": "IP Address or mDNS name",
+                        "nl": "IP Adres of mDNS naam"
                     },
                     "field": {
                         "text": {"value": ""}
@@ -503,33 +471,18 @@ async def main(loop: asyncio.AbstractEventLoop):
                         "number": {"value": 23, "min": 1, "max": 65535}
                     }
                 },
-                {
-                    "id": "monitor_power",
-                    "label": {
-                        "en": "Monitor Power State",
-                        "nl": "Monitor Aan/Uit Status"
-                    },
-                    "field": {
-                        "checkbox": {"value": False}
-                    }
-                }
+                # {
+                #     "id": "monitor_power",
+                #     "label": {
+                #         "en": "Monitor Power State",
+                #         "nl": "Monitor Aan/Uit Status"
+                #     },
+                #     "field": {
+                #         "checkbox": {"value": False}
+                #     }
+                # }
             ]
         )
-
-    # Discovery disabled - using direct IP input via setup
-    # if len(config.all_devices()) == 0:
-    #     _LOG.info("No devices configured - starting discovery for first-time setup...")
-    #     await discovery.start(on_device_discovered)
-    #
-    #     # Give discovery time to find devices (mDNS can take a few seconds)
-    #     _LOG.info("Waiting for initial discovery (8 seconds)...")
-    #     for _ in range(8):
-    #         await asyncio.sleep(1)
-    #         if discovered_devices:
-    #             _LOG.info(f"Discovery progress: {len(discovered_devices)} device(s) found so far")
-    #     _LOG.info(f"Initial discovery complete: {len(discovered_devices)} device(s) found: {list(discovered_devices.keys())}")
-    # else:
-    #     _LOG.info(f"Skipping discovery - {len(config.all_devices())} device(s) already configured")
 
     # Start the integration API with setup handler
     # Pass "driver.json" directly - ucapi library handles path resolution

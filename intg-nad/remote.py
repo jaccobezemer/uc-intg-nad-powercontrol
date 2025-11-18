@@ -19,7 +19,7 @@ _LOG = logging.getLogger(__name__)
 class NADRemote(Remote):
     """NAD Receiver Remote entity."""
 
-    def __init__(self, host: str, port: int = 23, name: str = "NAD Receiver", api=None, monitor_power: bool = False):
+    def __init__(self, host: str, port: int = 23, name: str = "NAD Receiver", api=None, monitor_power: bool = True):
         """
         Initialize NAD remote.
 
