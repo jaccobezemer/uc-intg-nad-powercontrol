@@ -237,7 +237,13 @@ async def main(loop: asyncio.AbstractEventLoop):
                             else:
                                 _LOG.warning(f"Connection attempt {attempt} failed for {device_id}")
                         else:
-                            _LOG.debug(f"Device {device_id} still connected")
+                            _LOG.debug(f"Device {device_id} still connected, updating power state")
+                            # Connection still exists, but refresh power state after standby
+                            try:
+                                await device.update_status()
+                                _LOG.info(f"Power state refreshed for {device_id}")
+                            except Exception as e:
+                                _LOG.warning(f"Failed to refresh power state for {device_id}: {e}")
                             break
                     except Exception as e:
                         _LOG.warning(f"Reconnection attempt {attempt} failed for {device_id}: {e}")
