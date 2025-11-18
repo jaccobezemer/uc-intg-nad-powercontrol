@@ -223,28 +223,25 @@ async def main(loop: asyncio.AbstractEventLoop):
             if device._monitor_power:
                 _LOG.info(f"Reconnecting device {device_id} after standby")
 
+                # Stop monitoring to prevent race conditions, will restart after reconnect
+                if device.client._monitoring:
+                    _LOG.debug(f"Stopping power monitoring for clean reconnect")
+                    await device.client.stop_power_monitoring()
+
+                # Always disconnect and reconnect to ensure clean state
+                await device.disconnect()
+
                 # Try up to 3 times with increasing delays
                 max_attempts = 3
                 for attempt in range(1, max_attempts + 1):
                     try:
-                        # Check if still connected
-                        if device.client._tn is None or not device.client._monitoring:
-                            _LOG.info(f"Attempt {attempt}/{max_attempts}: Connecting to {device_id}")
-                            connected = await device.connect()
-                            if connected:
-                                _LOG.info(f"Device {device_id} reconnected successfully")
-                                break
-                            else:
-                                _LOG.warning(f"Connection attempt {attempt} failed for {device_id}")
-                        else:
-                            _LOG.debug(f"Device {device_id} still connected, updating power state")
-                            # Connection still exists, but refresh power state after standby
-                            try:
-                                await device.update_status()
-                                _LOG.info(f"Power state refreshed for {device_id}")
-                            except Exception as e:
-                                _LOG.warning(f"Failed to refresh power state for {device_id}: {e}")
+                        _LOG.info(f"Attempt {attempt}/{max_attempts}: Connecting to {device_id}")
+                        connected = await device.connect()
+                        if connected:
+                            _LOG.info(f"Device {device_id} reconnected and power state refreshed")
                             break
+                        else:
+                            _LOG.warning(f"Connection attempt {attempt} failed for {device_id}")
                     except Exception as e:
                         _LOG.warning(f"Reconnection attempt {attempt} failed for {device_id}: {e}")
 
