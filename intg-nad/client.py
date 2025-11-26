@@ -395,7 +395,7 @@ class NADClient:
 
                     result = response.decode('ascii').strip()
 
-                    # Process received data (skip temperature to reduce log noise)
+                    # Process received data (skip temperature and other unsolicited messages to reduce log noise)
                     if result:
                         # Check if it's a power state update
                         if result.startswith("Main.Power="):
@@ -412,9 +412,7 @@ class NADClient:
                                     self._power_callback(power_on)
 
                             consecutive_errors = 0
-                        elif not result.startswith("Main.Temp."):
-                            # Log non-temperature unsolicited messages
-                            _LOG.debug(f"Unsolicited message: '{result}' (length={len(result)}, bytes={response!r})")
+                        # Silently ignore all other unsolicited messages (temperature, mute, source, etc.)
 
                 except asyncio.TimeoutError:
                     # Normal - no data available, continue monitoring
