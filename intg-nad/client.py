@@ -31,6 +31,7 @@ class NADClient:
         self._monitoring = False
         self._monitor_task: Optional[asyncio.Task] = None
         self._power_callback: Optional[Callable[[bool], None]] = None
+        self._last_power_state: Optional[bool] = None  # Track last known power state
 
     async def connect(self) -> bool:
         """
@@ -148,7 +149,10 @@ class NADClient:
         response = await self._send_command("Main.Power?")
         if response and "=" in response:
             value = response.split("=")[1].strip()
-            return value.lower() == "on"
+            power_on = value.lower() == "on"
+            # Update last known state to prevent false "state changed" logs
+            self._last_power_state = power_on
+            return power_on
         return None
 
     async def set_power(self, on: bool) -> bool:
@@ -163,7 +167,11 @@ class NADClient:
         """
         command = "Main.Power=On" if on else "Main.Power=Off"
         response = await self._send_command(command)
-        return response is not None
+        if response is not None:
+            # Update last known state
+            self._last_power_state = on
+            return True
+        return False
 
     async def get_volume(self) -> Optional[int]:
         """
@@ -402,14 +410,20 @@ class NADClient:
                             _LOG.debug(f"Monitor received: '{result}' (length={len(result)}, bytes={response!r})")
                             value = result.split("=")[1].strip()
                             power_on = value.lower() == "on"
-                            _LOG.info(f"Power state changed: {'ON' if power_on else 'OFF'}")
 
-                            # Call the callback
-                            if self._power_callback:
-                                if asyncio.iscoroutinefunction(self._power_callback):
-                                    await self._power_callback(power_on)
-                                else:
-                                    self._power_callback(power_on)
+                            # Only process if state actually changed
+                            if self._last_power_state != power_on:
+                                _LOG.info(f"Power state changed: {'ON' if power_on else 'OFF'}")
+                                self._last_power_state = power_on
+
+                                # Call the callback
+                                if self._power_callback:
+                                    if asyncio.iscoroutinefunction(self._power_callback):
+                                        await self._power_callback(power_on)
+                                    else:
+                                        self._power_callback(power_on)
+                            else:
+                                _LOG.debug(f"Power state unchanged ({('ON' if power_on else 'OFF')}), ignoring")
 
                             consecutive_errors = 0
                         # Silently ignore all other unsolicited messages (temperature, mute, source, etc.)
