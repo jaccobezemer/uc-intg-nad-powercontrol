@@ -32,6 +32,7 @@ class NADClient:
         self._monitor_task: Optional[asyncio.Task] = None
         self._power_callback: Optional[Callable[[bool], None]] = None
         self._last_power_state: Optional[bool] = None  # Track last known power state
+        self._pause_monitoring = False  # Flag to pause monitoring during commands
 
     async def connect(self) -> bool:
         """
@@ -78,66 +79,72 @@ class NADClient:
             _LOG.error("Not connected to NAD receiver")
             return None
 
-        async with self._lock:
-            try:
-                loop = asyncio.get_event_loop()
+        # Pause monitoring to prevent race condition
+        self._pause_monitoring = True
+        try:
+            async with self._lock:
+                try:
+                    loop = asyncio.get_event_loop()
 
-                # Send command with newline
-                cmd_bytes = f"{command}\r\n".encode('ascii')
-                _LOG.debug(f"Sending command: '{command}' (bytes={cmd_bytes!r})")
-                await loop.run_in_executor(None, self._tn.write, cmd_bytes)
+                    # Send command with newline
+                    cmd_bytes = f"{command}\r\n".encode('ascii')
+                    _LOG.debug(f"Sending command: '{command}' (bytes={cmd_bytes!r})")
+                    await loop.run_in_executor(None, self._tn.write, cmd_bytes)
 
-                # Determine expected response prefix based on command
-                # For query commands (Main.Power?), expect response starting with Main.Power=
-                # For set commands (Main.Power=On), expect response with Main.Power=
-                if "?" in command:
-                    expected_prefix = command.replace("?", "=")
-                elif "=" in command:
-                    expected_prefix = command.split("=")[0] + "="
-                else:
-                    expected_prefix = None
+                    # Determine expected response prefix based on command
+                    # For query commands (Main.Power?), expect response starting with Main.Power=
+                    # For set commands (Main.Power=On), expect response with Main.Power=
+                    if "?" in command:
+                        expected_prefix = command.replace("?", "=")
+                    elif "=" in command:
+                        expected_prefix = command.split("=")[0] + "="
+                    else:
+                        expected_prefix = None
 
-                # Read responses until we get the expected one or timeout
-                # NAD may send multiple status updates, we need the right one
-                # Use shorter timeout per read (0.5s) but keep trying for total timeout
-                start_time = asyncio.get_event_loop().time()
-                read_timeout = 0.5
-                skipped_count = 0
+                    # Read responses until we get the expected one or timeout
+                    # NAD may send multiple status updates, we need the right one
+                    # Use shorter timeout per read (0.5s) but keep trying for total timeout
+                    start_time = asyncio.get_event_loop().time()
+                    read_timeout = 0.5
+                    skipped_count = 0
 
-                while (asyncio.get_event_loop().time() - start_time) < self.timeout:
-                    try:
-                        response = await loop.run_in_executor(
-                            None,
-                            lambda: self._tn.read_until(b"\n", timeout=read_timeout)
-                        )
-                        result = response.decode('ascii').strip()
-                        _LOG.debug(f"Received telnet data: '{result}' (length={len(result)}, bytes={response!r})")
+                    while (asyncio.get_event_loop().time() - start_time) < self.timeout:
+                        try:
+                            response = await loop.run_in_executor(
+                                None,
+                                lambda: self._tn.read_until(b"\n", timeout=read_timeout)
+                            )
+                            result = response.decode('ascii').strip()
+                            _LOG.debug(f"Received telnet data: '{result}' (length={len(result)}, bytes={response!r})")
 
-                        # Skip empty lines
-                        if not result:
-                            _LOG.debug("Skipping empty line")
+                            # Skip empty lines
+                            if not result:
+                                _LOG.debug("Skipping empty line")
+                                continue
+
+                            # Check if this is the response we're looking for
+                            if expected_prefix is None or result.startswith(expected_prefix):
+                                if skipped_count > 0:
+                                    _LOG.debug(f"Skipped {skipped_count} status updates before receiving response")
+                                _LOG.debug(f"Command: {command} -> Response: {result}")
+                                return result
+                            else:
+                                skipped_count += 1
+                                _LOG.debug(f"Skipping unrelated status update: '{result}' (expected prefix: '{expected_prefix}')")
+                        except Exception as e:
+                            # Timeout or other error waiting for next line
+                            _LOG.debug(f"Read timeout or error (expected, continuing): {type(e).__name__}")
                             continue
 
-                        # Check if this is the response we're looking for
-                        if expected_prefix is None or result.startswith(expected_prefix):
-                            if skipped_count > 0:
-                                _LOG.debug(f"Skipped {skipped_count} status updates before receiving response")
-                            _LOG.debug(f"Command: {command} -> Response: {result}")
-                            return result
-                        else:
-                            skipped_count += 1
-                            _LOG.debug(f"Skipping unrelated status update: '{result}' (expected prefix: '{expected_prefix}')")
-                    except Exception as e:
-                        # Timeout or other error waiting for next line
-                        _LOG.debug(f"Read timeout or error (expected, continuing): {type(e).__name__}")
-                        continue
+                    _LOG.warning(f"Did not receive expected response for command '{command}' after {skipped_count} status updates (expected prefix: '{expected_prefix}')")
+                    return None
 
-                _LOG.warning(f"Did not receive expected response for command '{command}' after {skipped_count} status updates (expected prefix: '{expected_prefix}')")
-                return None
-
-            except Exception as e:
-                _LOG.error(f"Error sending command '{command}': {e}")
-                return None
+                except Exception as e:
+                    _LOG.error(f"Error sending command '{command}': {e}")
+                    return None
+        finally:
+            # Resume monitoring
+            self._pause_monitoring = False
 
     async def get_power(self) -> Optional[bool]:
         """
@@ -391,6 +398,11 @@ class NADClient:
                         _LOG.error(f"Reconnection error: {e}")
                         await asyncio.sleep(reconnect_delay)
                         continue
+
+                # Skip reading if commands are being sent to prevent race condition
+                if self._pause_monitoring:
+                    await asyncio.sleep(0.1)
+                    continue
 
                 try:
                     loop = asyncio.get_event_loop()

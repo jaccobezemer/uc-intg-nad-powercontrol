@@ -1,6 +1,6 @@
 {
   "driver_id": "nad_powercontrol",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "min_core_api": "0.20.0",
   "name": {
     "en": "NAD On/Off via Telnet",
