@@ -41,6 +41,9 @@ class NADRemote(Remote):
         # Current status
         self._state = States.OFF
 
+        # Periodic polling task
+        self._poll_task: Optional[asyncio.Task] = None
+
         # Create the remote entity with command handler
         # Note: Entity class auto-converts string name to {"en": name}
         super().__init__(
@@ -83,6 +86,11 @@ class NADRemote(Remote):
                 _LOG.info("Starting power state monitoring")
                 self.client.start_power_monitoring(self._on_power_change)
 
+            # Start periodic polling (every 5 minutes)
+            if not self._poll_task or self._poll_task.done():
+                _LOG.info("Starting periodic power state polling (5 min interval)")
+                self._poll_task = asyncio.create_task(self._periodic_poll())
+
             return True
 
         except Exception as e:
@@ -92,6 +100,15 @@ class NADRemote(Remote):
     async def disconnect(self):
         """Disconnect from device."""
         _LOG.info(f"Disconnecting from NAD receiver at {self.host}")
+
+        # Stop periodic polling
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
 
         # Stop power monitoring if running
         if self._monitor_power:
@@ -110,18 +127,38 @@ class NADRemote(Remote):
         self._state = States.ON if power_on else States.OFF
         await self.update_attributes()
 
-    async def update_status(self):
-        """Update device status from receiver."""
+    async def update_status(self, log_errors: bool = True):
+        """
+        Update device status from receiver.
+
+        Args:
+            log_errors: If False, suppress error logging (useful for periodic polls when NAD is off)
+        """
         try:
             # Get power state
             power = await self.client.get_power()
             if power is not None:
+                old_state = self._state
                 self._state = States.ON if power else States.OFF
 
-            await self.update_attributes()
+                # Only log if state actually changed
+                if old_state != self._state:
+                    _LOG.info(f"Power state updated: {old_state} -> {self._state}")
+
+                await self.update_attributes()
+                return True
+            else:
+                # NAD didn't respond (might be off or shutting down)
+                if log_errors:
+                    _LOG.warning(f"Could not get power state from NAD (no response)")
+                return False
 
         except Exception as e:
-            _LOG.error(f"Error updating status: {e}", exc_info=True)
+            if log_errors:
+                _LOG.error(f"Error updating status: {e}", exc_info=True)
+            else:
+                _LOG.debug(f"Error updating status (NAD might be off): {e}")
+            return False
 
     async def update_attributes(self):
         """Update entity attributes."""
@@ -134,6 +171,26 @@ class NADRemote(Remote):
                 self.entity_id,
                 attributes
             )
+
+    async def _periodic_poll(self):
+        """
+        Periodically poll NAD power state every 5 minutes.
+
+        This ensures state accuracy even if unsolicited updates are missed
+        (e.g., NAD turned off via CEC while integration monitoring wasn't active).
+        """
+        _LOG.info("Periodic polling task started")
+        try:
+            while True:
+                await asyncio.sleep(300)  # 5 minutes
+                _LOG.debug("Performing periodic power state poll")
+                # Don't log errors during periodic polls (NAD might be off)
+                await self.update_status(log_errors=False)
+        except asyncio.CancelledError:
+            _LOG.info("Periodic polling task stopped")
+            raise
+        except Exception as e:
+            _LOG.error(f"Unexpected error in periodic polling: {e}", exc_info=True)
 
     async def _handle_command(self, entity_id: str, command: str, params: dict[str, Any] | None = None) -> StatusCodes:
         """
@@ -174,9 +231,15 @@ class NADRemote(Remote):
                         if power is not None:
                             await self.client.set_power(not power)
 
-            # Update status after command
+            # Update status after command (but don't fail if NAD is shutting down)
             await asyncio.sleep(0.1)
-            await self.update_status()
+            success = await self.update_status(log_errors=False)
+
+            # If update failed after power OFF, assume NAD is shutting down and set state to OFF
+            if not success and command in [Commands.OFF, "POWER_OFF"]:
+                _LOG.info("NAD didn't respond after power off (likely shutting down), setting state to OFF")
+                self._state = States.OFF
+                await self.update_attributes()
 
             return StatusCodes.OK
 
