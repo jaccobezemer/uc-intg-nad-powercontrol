@@ -407,11 +407,23 @@ class NADClient:
                 try:
                     loop = asyncio.get_event_loop()
 
-                    # Read any incoming line with short timeout (non-blocking check)
-                    response = await loop.run_in_executor(
-                        None,
-                        lambda: self._tn.read_until(b"\n", timeout=1.0)
-                    )
+                    # Use lock to prevent reading during command execution
+                    # Try to acquire lock with timeout to avoid blocking monitoring too long
+                    try:
+                        await asyncio.wait_for(self._lock.acquire(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        # Lock is held by command, skip this iteration
+                        await asyncio.sleep(0.1)
+                        continue
+
+                    try:
+                        # Read any incoming line with short timeout (non-blocking check)
+                        response = await loop.run_in_executor(
+                            None,
+                            lambda: self._tn.read_until(b"\n", timeout=1.0)
+                        )
+                    finally:
+                        self._lock.release()
 
                     result = response.decode('ascii').strip()
 
