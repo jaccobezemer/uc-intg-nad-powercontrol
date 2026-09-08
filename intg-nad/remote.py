@@ -1,248 +1,86 @@
-"""NAD Remote entity implementation."""
+"""NAD remote entity."""
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
-from ucapi import Remote, StatusCodes
-from ucapi.remote import (
-    Attributes,
-    Commands,
-    Features,
-    States,
-)
+from ucapi import remote, StatusCodes
+from ucapi_framework import RemoteEntity
 
-from client import NADClient
+from config import NADDeviceConfig
+from device import NADDevice
 
 _LOG = logging.getLogger(__name__)
 
+FEATURES = [
+    remote.Features.ON_OFF,
+    remote.Features.TOGGLE,
+]
 
-class NADRemote(Remote):
-    """NAD Receiver Remote entity."""
+_STATE_MAP = {
+    "ON": remote.States.ON,
+    "OFF": remote.States.OFF,
+    "UNAVAILABLE": remote.States.UNAVAILABLE,
+}
 
-    def __init__(self, host: str, port: int = 23, name: str = "NAD Receiver", api=None, monitor_power: bool = True):
-        """
-        Initialize NAD remote.
 
-        Args:
-            host: NAD receiver IP address
-            port: Telnet port (default 23)
-            name: Device name (from setup)
-            api: Integration API instance
-            monitor_power: Enable continuous power state monitoring
-        """
-        self.host = host
-        self.port = port
-        self._api = api
-        self.entity_id = f"nad_{host.replace('.', '_')}"
-        self._monitor_power = monitor_power
+class NADRemoteEntity(RemoteEntity):
+    """Remote entity for NAD receivers (power control only)."""
 
-        self.client = NADClient(host=host, port=port)
-
-        # Current status
-        self._state = States.OFF
-
-        # Periodic polling task
-        self._poll_task: Optional[asyncio.Task] = None
-
-        # Create the remote entity with command handler
-        # Note: Entity class auto-converts string name to {"en": name}
+    def __init__(self, device_config: NADDeviceConfig, device: NADDevice) -> None:
+        self._device = device
+        # Keep the original entity ID scheme ("nad_<host>", no dot) so
+        # upgrading never breaks existing activity references - see
+        # NADDriver.device_from_entity_id() for the matching parse side.
+        entity_id = f"nad_{device_config.identifier}"
         super().__init__(
-            identifier=self.entity_id,
-            name=name,  # Pass as string - Entity class handles dict conversion
-            features=[
-                Features.ON_OFF,
-                Features.TOGGLE,
-            ],
+            entity_id,
+            device_config.name,
+            features=FEATURES,
             attributes={
-                Attributes.STATE: self._state,
+                remote.Attributes.STATE: remote.States.UNKNOWN,
             },
             simple_commands=["POWER_ON", "POWER_OFF", "POWER_TOGGLE"],
             cmd_handler=self._handle_command,
         )
-        # Note: self.name is now {"en": name} dict as set by Entity.__init__
+        self.subscribe_to_device(device)
 
-    async def connect(self) -> bool:
-        """Connect to NAD receiver."""
-        _LOG.info(f"Connecting to NAD receiver at {self.host}:{self.port}")
+    async def sync_state(self) -> None:
+        d = self._device
+        self.set_state(_STATE_MAP.get(d.state, remote.States.UNKNOWN), update=True)
 
+    async def _handle_command(
+        self, entity: remote.Remote, cmd_id: str, params: dict[str, Any] | None
+    ) -> StatusCodes:
         try:
-            connected = await self.client.connect()
-
-            if not connected:
-                _LOG.error(f"Could not connect to NAD receiver at {self.host}")
-                return False
-
-            # Fetch initial status
-            await self.update_status()
-
-            # Get receiver info for logging (don't use for naming anymore)
-            model = await self.client.get_model()
-            version = await self.client.get_version()
-            _LOG.debug(f"Model response: {model}, Version response: {version}")
-            _LOG.info(f"Connected to NAD receiver at {self.host} (model: {model}, firmware: {version})")
-
-            # Start power monitoring if enabled
-            if self._monitor_power:
-                _LOG.info("Starting power state monitoring")
-                self.client.start_power_monitoring(self._on_power_change)
-
-            # Start periodic polling (every 5 minutes)
-            if not self._poll_task or self._poll_task.done():
-                _LOG.info("Starting periodic power state polling (5 min interval)")
-                self._poll_task = asyncio.create_task(self._periodic_poll())
-
-            return True
-
-        except Exception as e:
-            _LOG.error(f"Error connecting: {e}", exc_info=True)
-            return False
-
-    async def disconnect(self):
-        """Disconnect from device."""
-        _LOG.info(f"Disconnecting from NAD receiver at {self.host}")
-
-        # Stop periodic polling
-        if self._poll_task and not self._poll_task.done():
-            self._poll_task.cancel()
-            try:
-                await self._poll_task
-            except asyncio.CancelledError:
-                pass
-            self._poll_task = None
-
-        # Stop power monitoring if running
-        if self._monitor_power:
-            await self.client.stop_power_monitoring()
-
-        await self.client.close()
-
-    async def _on_power_change(self, power_on: bool):
-        """
-        Callback when power state changes.
-
-        Args:
-            power_on: True if power is on, False if off
-        """
-        _LOG.info(f"Power state changed externally: {'ON' if power_on else 'OFF'}")
-        self._state = States.ON if power_on else States.OFF
-        await self.update_attributes()
-
-    async def update_status(self, log_errors: bool = True):
-        """
-        Update device status from receiver.
-
-        Args:
-            log_errors: If False, suppress error logging (useful for periodic polls when NAD is off)
-        """
-        try:
-            # Get power state
-            power = await self.client.get_power()
-            if power is not None:
-                old_state = self._state
-                self._state = States.ON if power else States.OFF
-
-                # Only log if state actually changed
-                if old_state != self._state:
-                    _LOG.info(f"Power state updated: {old_state} -> {self._state}")
-
-                await self.update_attributes()
-                return True
-            else:
-                # NAD didn't respond (might be off or shutting down)
-                if log_errors:
-                    _LOG.warning(f"Could not get power state from NAD (no response)")
-                return False
-
-        except Exception as e:
-            if log_errors:
-                _LOG.error(f"Error updating status: {e}", exc_info=True)
-            else:
-                _LOG.debug(f"Error updating status (NAD might be off): {e}")
-            return False
-
-    async def update_attributes(self):
-        """Update entity attributes."""
-        if self._api:
-            attributes = {
-                Attributes.STATE: self._state,
-            }
-
-            self._api.configured_entities.update_attributes(
-                self.entity_id,
-                attributes
-            )
-
-    async def _periodic_poll(self):
-        """
-        Periodically poll NAD power state every 5 minutes.
-
-        This ensures state accuracy even if unsolicited updates are missed
-        (e.g., NAD turned off via CEC while integration monitoring wasn't active).
-        """
-        _LOG.info("Periodic polling task started")
-        try:
-            while True:
-                await asyncio.sleep(300)  # 5 minutes
-                _LOG.debug("Performing periodic power state poll")
-                # Don't log errors during periodic polls (NAD might be off)
-                await self.update_status(log_errors=False)
-        except asyncio.CancelledError:
-            _LOG.info("Periodic polling task stopped")
-            raise
-        except Exception as e:
-            _LOG.error(f"Unexpected error in periodic polling: {e}", exc_info=True)
-
-    async def _handle_command(self, entity_id: str, command: str, params: dict[str, Any] | None = None) -> StatusCodes:
-        """
-        Handle remote commands.
-
-        Args:
-            entity_id: The ID of the entity receiving the command
-            command: The command to execute
-            params: Optional parameters
-
-        Returns:
-            StatusCode of the operation
-        """
-        _LOG.info(f"Command received: {command} with params: {params}")
-
-        try:
-            if command == Commands.ON:
-                await self.client.set_power(True)
-
-            elif command == Commands.OFF:
-                await self.client.set_power(False)
-
-            elif command == Commands.TOGGLE:
-                power = await self.client.get_power()
-                if power is not None:
-                    await self.client.set_power(not power)
-
-            elif command == Commands.SEND_CMD:
-                # Handle simple commands
-                if params and "command" in params:
-                    cmd = params["command"]
-                    if cmd == "POWER_ON":
-                        await self.client.set_power(True)
-                    elif cmd == "POWER_OFF":
-                        await self.client.set_power(False)
-                    elif cmd == "POWER_TOGGLE":
-                        power = await self.client.get_power()
-                        if power is not None:
-                            await self.client.set_power(not power)
-
-            # Update status after command (but don't fail if NAD is shutting down)
-            await asyncio.sleep(0.1)
-            success = await self.update_status(log_errors=False)
-
-            # If update failed after power OFF, assume NAD is shutting down and set state to OFF
-            if not success and command in [Commands.OFF, "POWER_OFF"]:
-                _LOG.info("NAD didn't respond after power off (likely shutting down), setting state to OFF")
-                self._state = States.OFF
-                await self.update_attributes()
-
-            return StatusCodes.OK
-
-        except Exception as e:
-            _LOG.error(f"Error executing command {command}: {e}")
+            return await self._dispatch_command(cmd_id, params)
+        except Exception as err:  # pylint: disable=broad-except
+            _LOG.error("[%s] Command error: %s", self.id, err)
             return StatusCodes.SERVER_ERROR
+
+    async def _dispatch_command(self, cmd_id: str, params: dict[str, Any] | None) -> StatusCodes:
+        d = self._device
+
+        if cmd_id == remote.Commands.ON:
+            ok = await d.set_power(True)
+        elif cmd_id == remote.Commands.OFF:
+            ok = await d.set_power(False)
+        elif cmd_id == remote.Commands.TOGGLE:
+            ok = await d.toggle_power()
+        elif cmd_id == remote.Commands.SEND_CMD:
+            simple_cmd = (params or {}).get("command")
+            if simple_cmd == "POWER_ON":
+                ok = await d.set_power(True)
+            elif simple_cmd == "POWER_OFF":
+                ok = await d.set_power(False)
+            elif simple_cmd == "POWER_TOGGLE":
+                ok = await d.toggle_power()
+            else:
+                return StatusCodes.BAD_REQUEST
+        else:
+            return StatusCodes.NOT_IMPLEMENTED
+
+        # Push the new state immediately rather than waiting for the next poll.
+        await asyncio.sleep(0.1)
+        await self.sync_state()
+
+        return StatusCodes.OK if ok else StatusCodes.SERVER_ERROR

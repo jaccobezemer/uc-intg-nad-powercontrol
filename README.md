@@ -23,13 +23,10 @@ This integration uses the Telnet protocol and is known to work with:
 
 ## Setup
 
-### Step 1: Configure Receiver
-1. After installation, click "Setup" to configure the integration
-2. Enter your NAD receiver's IP address
-3. Enter the Telnet port (default: 23)
-4. Click "Done"
-
-The integration will attempt to connect to your NAD receiver and automatically detect the model.
+1. After installation, click "Setup" to configure the integration.
+2. The integration scans your network for NAD/BluOS devices (this may take a few seconds).
+3. Select your receiver from the list, or choose "Setup Manually" to enter its IP address directly.
+4. Click "Done" to finish. Repeat the process to add additional receivers.
 
 ## NAD Telnet Protocol
 
