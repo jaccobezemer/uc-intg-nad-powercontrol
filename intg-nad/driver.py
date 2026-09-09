@@ -21,6 +21,15 @@ _LOG = logging.getLogger(__name__)
 # Kept unchanged across every version so upgrading never breaks activity references.
 _ENTITY_ID_PREFIX = "nad_"
 
+# After a real system suspend, WiFi needs a moment to re-associate before the
+# NAD receiver is reachable again. A single immediate connect attempt (the
+# framework's default) reliably fails with "Network is unreachable" right at
+# wake-up, and nothing retries afterwards - leaving the entity unavailable
+# until something else (e.g. re-subscribing) happens to trigger a reconnect.
+_RECONNECT_NETWORK_SETTLE_SECONDS = 3
+_RECONNECT_MAX_ATTEMPTS = 3
+_RECONNECT_BACKOFF_SECONDS = 2
+
 
 class NADDriver(BaseIntegrationDriver[NADDevice, NADDeviceConfig]):
     """NAD integration driver."""
@@ -41,6 +50,32 @@ class NADDriver(BaseIntegrationDriver[NADDevice, NADDeviceConfig]):
         if entity_id.startswith(_ENTITY_ID_PREFIX):
             return entity_id[len(_ENTITY_ID_PREFIX):]
         return None
+
+    async def on_r2_connect_cmd(self) -> None:
+        await self.api.set_device_state(DeviceStates.CONNECTED)
+        for device_id, device in list(self._device_instances.items()):
+            self._loop.create_task(self._reconnect_with_retry(device_id, device))
+
+    async def on_r2_exit_standby(self) -> None:
+        _LOG.info("Exit standby: waiting %ds for network before reconnecting", _RECONNECT_NETWORK_SETTLE_SECONDS)
+        await asyncio.sleep(_RECONNECT_NETWORK_SETTLE_SECONDS)
+        for device_id, device in list(self._device_instances.items()):
+            self._loop.create_task(self._reconnect_with_retry(device_id, device))
+
+    async def _reconnect_with_retry(self, device_id: str, device: NADDevice) -> None:
+        for attempt in range(1, _RECONNECT_MAX_ATTEMPTS + 1):
+            try:
+                if await device.connect():
+                    _LOG.info("Device %s reconnected successfully", device_id)
+                    return
+                _LOG.warning("Connection attempt %d/%d failed for %s", attempt, _RECONNECT_MAX_ATTEMPTS, device_id)
+            except Exception as err:  # pylint: disable=broad-except
+                _LOG.warning("Reconnection attempt %d/%d failed for %s: %s", attempt, _RECONNECT_MAX_ATTEMPTS, device_id, err)
+
+            if attempt < _RECONNECT_MAX_ATTEMPTS:
+                await asyncio.sleep(attempt * _RECONNECT_BACKOFF_SECONDS)
+
+        _LOG.error("Failed to reconnect device %s after %d attempts", device_id, _RECONNECT_MAX_ATTEMPTS)
 
 
 def _get_driver_path() -> str:
