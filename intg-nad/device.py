@@ -58,7 +58,13 @@ class NADDevice(PollingDevice):
         if not connected:
             raise ConnectionError(f"Cannot reach NAD receiver at {self.address}:{self._device_config.port}")
 
-        await self._refresh_status(push=False)
+        # Force a push here: the framework marks the entity UNAVAILABLE on any
+        # prior disconnect/error independently of our own state tracking, so a
+        # reconnect must unconditionally re-announce the current state rather
+        # than rely on the "did state change" gate poll_device() uses - by the
+        # time the next poll runs, self._state already matches, so it would
+        # never push and the entity would stay stuck UNAVAILABLE.
+        await self._refresh_status(push=True, force=True)
 
         model = await self.client.get_model()
         version = await self.client.get_version()
@@ -79,14 +85,14 @@ class NADDevice(PollingDevice):
     async def poll_device(self) -> None:
         await self._refresh_status(push=True)
 
-    async def _refresh_status(self, push: bool) -> None:
+    async def _refresh_status(self, push: bool, force: bool = False) -> None:
         power = await self.client.get_power()
         if power is None:
             return
         new_state = "ON" if power else "OFF"
         changed = new_state != self._state
         self._state = new_state
-        if push and changed:
+        if push and (changed or force):
             self.push_update()
 
     async def _on_power_change(self, power_on: bool) -> None:

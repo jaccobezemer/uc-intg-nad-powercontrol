@@ -45,8 +45,15 @@ class NADRemoteEntity(RemoteEntity):
         self.subscribe_to_device(device)
 
     async def sync_state(self) -> None:
+        # Deliberately not using RemoteEntity.set_state(update=True): it mutates
+        # self.attributes in place *before* comparing against the cached value
+        # in configured_entities - which is the exact same dict object (the
+        # registry stores a reference to this entity, not a copy). By the time
+        # the comparison runs, both sides already hold the new value, so the
+        # diff always looks like "nothing changed" and nothing is ever pushed
+        # to the Remote. Building a fresh dict here avoids the aliasing.
         d = self._device
-        self.set_state(_STATE_MAP.get(d.state, remote.States.UNKNOWN), update=True)
+        self.update({remote.Attributes.STATE: _STATE_MAP.get(d.state, remote.States.UNKNOWN)})
 
     async def _handle_command(
         self, entity: remote.Remote, cmd_id: str, params: dict[str, Any] | None
