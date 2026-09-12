@@ -1,4 +1,5 @@
 """NAD device implementation using ucapi_framework's PollingDevice."""
+import asyncio
 import logging
 from typing import Any
 
@@ -24,6 +25,7 @@ class NADDevice(PollingDevice):
         self.client = NADClient(host=device_config.host, port=device_config.port)
         self._monitor_power = device_config.monitor_power
         self._state: str = "OFF"
+        self._connect_lock = asyncio.Lock()
 
     # -- Identity ---------------------------------------------------------
 
@@ -102,13 +104,33 @@ class NADDevice(PollingDevice):
 
     # -- Commands -------------------------------------------------------------
 
+    async def _ensure_connected(self) -> bool:
+        """Reconnect on demand before a command, rather than failing instantly.
+
+        Commands arrive independently of the driver's background reconnect
+        (e.g. right after the Remote wakes from standby, before WiFi has
+        re-associated). Without this, a command sent while the telnet
+        connection is down fails immediately with no chance to succeed,
+        instead of waiting the moment it takes for the network to come back.
+        """
+        if self.is_connected:
+            return True
+        async with self._connect_lock:
+            if self.is_connected:
+                return True
+            return await self.connect()
+
     async def set_power(self, on: bool) -> bool:
+        if not await self._ensure_connected():
+            return False
         ok = await self.client.set_power(on)
         if ok:
             self._state = "ON" if on else "OFF"
         return ok
 
     async def toggle_power(self) -> bool:
+        if not await self._ensure_connected():
+            return False
         power = await self.client.get_power()
         if power is None:
             return False
