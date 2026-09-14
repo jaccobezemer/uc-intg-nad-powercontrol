@@ -47,4 +47,5 @@ devices.json
 # Build artifacts
 artifacts/
 *.tar.gz
+*.spec
 
