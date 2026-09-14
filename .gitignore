@@ -44,3 +44,7 @@ devices.json
 .claude/
 .codegraph/
 
+# Build artifacts
+artifacts/
+*.tar.gz
+
